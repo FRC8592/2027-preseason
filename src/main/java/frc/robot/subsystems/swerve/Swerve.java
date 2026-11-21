@@ -1,0 +1,439 @@
+// Copyright (c) FIRST and other WPILib contributors.
+// Open Source Software; you can modify and/or share it under the terms of
+// the WPILib BSD license file in the root directory of this project.
+package frc.robot.subsystems.swerve;
+
+import org.littletonrobotics.junction.Logger;
+
+import com.ctre.phoenix6.swerve.SwerveDrivetrain.SwerveDriveState;
+import com.ctre.phoenix6.swerve.SwerveModule.DriveRequestType;
+import com.ctre.phoenix6.swerve.SwerveRequest;
+import com.pathplanner.lib.auto.AutoBuilder;
+import com.pathplanner.lib.config.PIDConstants;
+import com.pathplanner.lib.config.RobotConfig;
+import com.pathplanner.lib.controllers.PPHolonomicDriveController;
+
+import org.wpilib.math.controller.PIDController;
+import org.wpilib.math.geometry.Pose2d;
+import org.wpilib.math.geometry.Pose3d;
+import org.wpilib.math.geometry.Rotation2d;
+import org.wpilib.math.geometry.Translation3d;
+import org.wpilib.math.kinematics.ChassisVelocities;
+import org.wpilib.driverstation.MatchState;
+import org.wpilib.driverstation.RobotState;
+import org.wpilib.driverstation.Alliance;
+import org.wpilib.driverstation.MatchType;
+import org.wpilib.driverstation.DriverStationErrors;
+import org.wpilib.smartdashboard.SmartDashboard;
+import org.wpilib.command2.Command;
+import org.wpilib.command2.SubsystemBase;
+import org.wpilib.command2.sysid.SysIdRoutine;
+import frc.robot.Constants.SWERVE;
+import frc.robot.Robot;
+import frc.robot.helpers.SmoothingFilter;
+
+public class Swerve extends SubsystemBase {
+
+    private PIDController snapToController;
+
+    private boolean isSnailMode;
+    private boolean isLessSlowMode;
+    private boolean alignedHeading = false;
+    private boolean isRobotRelative = false;
+
+    private SmoothingFilter smoothingFilter;
+
+    private CommandSwerveDrivetrain swerve;
+    private final SwerveRequest.FieldCentric fieldCentric =
+            new SwerveRequest.FieldCentric().withDeadband(SWERVE.MAX_SPEED * 0.01)
+                    .withRotationalDeadband(SWERVE.MAX_ANGULAR_RATE * 0.01) // Add a 1%
+                                                                            // deadband
+                    .withDriveRequestType(DriveRequestType.Velocity); // Use closed-loop control for
+                                                                      // drive motors
+
+    private final SwerveRequest.RobotCentric robotCentric =
+            new SwerveRequest.RobotCentric().withDeadband(SWERVE.MAX_SPEED * 0.01)
+                    .withRotationalDeadband(SWERVE.MAX_ANGULAR_RATE * 0.01)
+                    .withDriveRequestType(DriveRequestType.Velocity);
+
+    private SwerveRequest.SwerveDriveBrake X_Mode =
+            new SwerveRequest.SwerveDriveBrake().withDriveRequestType(DriveRequestType.Velocity);
+
+    public static ChassisVelocities speedZero = new ChassisVelocities();
+
+    private RobotConfig config = null;
+
+    public Swerve(CommandSwerveDrivetrain drivetrain) {
+        smoothingFilter = new SmoothingFilter(SWERVE.TRANSLATION_SMOOTHING_AMOUNT,
+                SWERVE.TRANSLATION_SMOOTHING_AMOUNT, SWERVE.ROTATION_SMOOTHING_AMOUNT);
+
+        snapToController =
+                new PIDController(SWERVE.SNAP_TO_kP, SWERVE.SNAP_TO_kI, SWERVE.SNAP_TO_kD); // Turns
+                                                                                            // the
+                                                                                            // robot
+                                                                                            // to a
+                                                                                            // set
+                                                                                            // heading
+        snapToController.enableContinuousInput(-Math.PI, Math.PI); // makes -pi and pi friendly
+                                                                   // neighbors :)
+        snapToController.setTolerance(Math.toRadians(2.0)); // prevent chatter and oscillation
+    SmartDashboard.putNumber("Heading Lock (deg)", 0.0);
+
+        
+        swerve = drivetrain;
+
+
+        // PathPlanner AutoBuilder configuration below.
+        https: // pathplanner.dev/pplib-build-an-auto.html
+        try {
+            config = RobotConfig.fromGUISettings();
+        } catch (Exception e) {
+            // Handle exception as needed
+            e.printStackTrace();
+            // end method to prevent NullPointerException
+            return;
+        }
+
+        // Configure AutoBuilder
+        AutoBuilder.configure(this::getCurrentOdometryPosition, // Robot pose supplier
+                this::setKnownOdometryPose, // Method to reset odometry (will be called if your auto
+                                            // has a starting
+                                            // pose)
+                this::getRobotRelativeSpeeds, // ChassisVelocities supplier. MUST BE ROBOT RELATIVE
+
+                (speeds, feedforwards) -> driveRobotRelative(speeds), // Method that will drive the
+                                                                      // robot given ROBOT
+                                                                      // RELATIVE ChassisVelocities.
+                                                                      // Also optionally outputs
+                                                                      // individual module
+                                                                      // feedforwards
+                // TODO: replace pid constants
+                new PPHolonomicDriveController( // PPHolonomicController is the built in path
+                                                // following controller for
+                                                // holonomic drive trains
+                        new PIDConstants(SWERVE.PATH_FOLLOW_DRIVE_KP, SWERVE.PATH_FOLLOW_DRIVE_KI,
+                                SWERVE.PATH_FOLLOW_DRIVE_KD), // Translation PID constants
+                        new PIDConstants(SWERVE.PATH_FOLLOW_STEER_KP, SWERVE.PATH_FOLLOW_STEER_KI,
+                                SWERVE.PATH_FOLLOW_STEER_KD) // Rotation PID constants
+                ),
+
+                config, // The robot configuration
+
+                () -> {
+                    // Boolean supplier that controls when the path will be mirrored for the red
+                    // alliance
+                    // This will flip the path being followed to the red side of the field.
+                    // THE ORIGIN WILL REMAIN ON THE BLUE SIDE
+                    var alliance = MatchState.getAlliance();
+                    if (alliance.isPresent())
+                        return alliance.get() == Alliance.RED;
+                    return false;
+
+                },
+
+                this // Reference to this subsystem to set requirements
+        );
+    }
+
+    /**
+     * Gets robot relative speeds commanded to the robot (NOT the calculated robot relative speeds)
+     * 
+     * @return current ChassisVelocities
+     */
+    public ChassisVelocities getRobotRelativeSpeeds() {
+        return swerve.getState().Speeds;
+    }
+
+
+    /**
+     * Runs the SysId Quasistatic test in the given direction for the routine specified in the
+     * parameters
+     * 
+     * @param direction Direction of the Quasistatic routine
+     * @return Command to run
+     */
+    public Command sysIdQuasistatic(SysIdRoutine.Direction direction) {
+        return swerve.sysIdQuasistatic(direction);
+    }
+
+    /**
+     * Runs the SysId Dynamic test in the given direction for the routine specified in the
+     * parameters
+     * 
+     * @param direction Direction of the Dynamic routine
+     * @return Command to run
+     */
+    public Command sysIdDynamic(SysIdRoutine.Direction direction) {
+        return swerve.sysIdDynamic(direction);
+    }
+
+    @Override
+    public void periodic() {
+        SwerveDriveState state = swerve.getState();
+
+        Logger.recordOutput(SWERVE.LOG_PATH + "Current Pose", getCurrentOdometryPosition());
+        Logger.recordOutput(SWERVE.LOG_PATH + "Current 3D Pose", get3DCurrentOdometryPosition());
+        Logger.recordOutput(SWERVE.LOG_PATH + "ChassisVelocities", getRobotRelativeSpeeds());
+        Logger.recordOutput(SWERVE.LOG_PATH + "ModuleStates", state.ModuleStates);
+        Logger.recordOutput(SWERVE.LOG_PATH + "ModulePositions", state.ModulePositions);
+        Logger.recordOutput(SWERVE.LOG_PATH + "ModuleTargets", state.ModuleTargets);
+
+        Logger.recordOutput(SWERVE.LOG_PATH + "WHITE/targetspeed, CAN 7", state.ModuleTargets[0].velocity);
+        Logger.recordOutput(SWERVE.LOG_PATH + "WHITE/realspeed, CAN 7", state.ModuleStates[0].velocity);
+
+        Logger.recordOutput(SWERVE.LOG_PATH + "ORANGE/targetsped, CAN 5", state.ModuleTargets[1].velocity);
+        Logger.recordOutput(SWERVE.LOG_PATH + "ORANGE/realspeed, CAN 5", state.ModuleStates[1].velocity);
+
+        Logger.recordOutput(SWERVE.LOG_PATH + "TEAL/targetspeed, CAN 3", state.ModuleTargets[3].velocity);
+        Logger.recordOutput(SWERVE.LOG_PATH + "TEAL/realspeed, CAN 3", state.ModuleStates[3].velocity);
+        
+        Logger.recordOutput(SWERVE.LOG_PATH + "BLACK/targetspeed, CAN 9", state.ModuleTargets[2].velocity);
+        Logger.recordOutput(SWERVE.LOG_PATH + "BLACK/realspeed, CAN 9", state.ModuleStates[2].velocity);
+
+        // TODO: do we really need to run this?
+        swerve.periodic();
+    }
+
+    @Override
+    public void simulationPeriodic() {
+        Robot.FIELD.setRobotPose(getCurrentOdometryPosition());
+    }
+
+    /**
+     * Send a {@code ChassisVelocities} to the drivetrain, field-relative
+     *
+     * @param speeds robot-relative ChassisVelocities speed to run the drivetrain at
+     */
+    public void drive(ChassisVelocities speeds) {
+        Logger.recordOutput(SWERVE.LOG_PATH + "TargetSpeeds", speeds);
+
+        if (isRobotRelative) {
+            double translationMultiplier = SWERVE.TRANSLATE_POWER_FAST;
+            double rotationMultiplier = 1.0;
+
+            if (isSnailMode) {
+                translationMultiplier = SWERVE.TRANSLATE_POWER_SNAIL;
+                rotationMultiplier = SWERVE.ROTATE_POWER_SNAIL;
+            } else if (isLessSlowMode) {
+                translationMultiplier = SWERVE.TRANSLATE_POWER_LESS_SLOW;
+                rotationMultiplier = SWERVE.ROTATE_POWER_LESS_SLOW;
+            }
+
+            swerve.setControl(robotCentric
+                    .withVelocityX(speeds.vx * translationMultiplier)
+                    .withVelocityY(speeds.vy * translationMultiplier)
+                    .withRotationalRate(speeds.omega * rotationMultiplier));
+            return;
+        }
+
+        if (alignedHeading && !speeds.equals(speedZero)) {
+            double targetHeadingRadians =
+                    Math.atan2(speeds.vy, speeds.vx);
+            Rotation2d targetHeading = new Rotation2d(targetHeadingRadians);
+            double omega = snapToAngle(targetHeading);
+
+            swerve.setControl(fieldCentric.withVelocityX(speeds.vx)
+                    .withVelocityY(speeds.vy).withRotationalRate(omega));
+        } else if (isSnailMode) {
+            swerve.setControl(fieldCentric
+                    .withVelocityX(speeds.vx * SWERVE.TRANSLATE_POWER_SNAIL)
+                    .withVelocityY(speeds.vy * SWERVE.TRANSLATE_POWER_SNAIL)
+                    .withRotationalRate(speeds.omega * SWERVE.ROTATE_POWER_SNAIL));
+        } else if (isLessSlowMode) {
+            swerve.setControl(fieldCentric
+                    .withVelocityX(speeds.vx * SWERVE.TRANSLATE_POWER_LESS_SLOW)
+                    .withVelocityY(speeds.vy * SWERVE.TRANSLATE_POWER_LESS_SLOW)
+                    .withRotationalRate(speeds.omega * SWERVE.ROTATE_POWER_LESS_SLOW));
+        } else {
+            swerve.setControl(fieldCentric.withVelocityX(speeds.vx)
+                    .withVelocityY(speeds.vy)
+                    .withRotationalRate(speeds.omega));
+        }
+
+    }
+
+    /**
+     * Sends a robot-relative ChassisVelocities to the drivetrain
+     * 
+     * @param speeds robot-relative ChassisVelocities to run the drivetrain at
+     */
+    public void driveRobotRelative(ChassisVelocities speeds) {
+        swerve.setControl(robotCentric.withVelocityX(speeds.vx)
+                .withVelocityY(speeds.vy)
+                .withRotationalRate(speeds.omega));
+    }
+    
+public void driveAtHeading(ChassisVelocities speeds) {
+    double targetDegrees =
+            SmartDashboard.getNumber("Heading Lock (deg)", 0.0);
+
+    Rotation2d targetHeading =
+            Rotation2d.fromDegrees(targetDegrees);
+
+    double omega = snapToAngle(targetHeading);
+
+    swerve.setControl(fieldCentric
+            .withVelocityX(speeds.vx)
+            .withVelocityY(speeds.vy)
+            .withRotationalRate(omega));
+
+    double currentDegrees = getYaw().getDegrees();
+    double errorDegrees =
+            targetHeading.minus(getYaw()).getDegrees();
+
+    Logger.recordOutput(
+            SWERVE.LOG_PATH + "HeadingLock/TargetDegrees",
+            targetDegrees);
+
+    Logger.recordOutput(
+            SWERVE.LOG_PATH + "HeadingLock/CurrentDegrees",
+            currentDegrees);
+
+    Logger.recordOutput(
+            SWERVE.LOG_PATH + "HeadingLock/ErrorDegrees",
+            errorDegrees);
+}
+
+    /**
+     * Define whatever direction the robot is facing as forward
+     */
+    public void resetHeading() {
+        swerve.seedFieldCentric();
+    }
+
+    public void alignedHeading() {
+        alignedHeading = !alignedHeading;
+    }
+
+    /**
+     * Stop the swerve (feed zeros for all target velocities)
+     */
+    public void stop() {
+        drive(speedZero);
+    }
+
+    /**
+     * Commands the swerve to stop
+     * 
+     * @return a command to stop the drivetrain
+     */
+    public Command stopCommand() {
+        return swerve.runOnce(() -> stop());
+    }
+
+    /**
+     * Turn all wheels into an "X" position so that the chassis effectively can't move
+     */
+    public void brake() {
+        swerve.setControl(X_Mode);
+    }
+
+    /**
+     * Get the rotation of the current robot pose
+     * 
+     * @return Rotation2d robot rotation
+     */
+    public Rotation2d getYaw() {
+        return swerve.getState().Pose.getRotation();
+    };
+
+    /**
+     * Get the current pose of the robot
+     * 
+     * @return Pose2d robot pose
+     */
+    public Pose2d getCurrentOdometryPosition() {
+        return swerve.getState().Pose;
+    }
+
+    // This does not take into account z-height
+    public Pose3d get3DCurrentOdometryPosition() {
+        return new Pose3d(new Translation3d(swerve.getState().Pose.getTranslation()),
+                swerve.getRotation3d());
+    }
+
+    public void setKnownOdometryPose(Pose2d currentPose) {
+        swerve.resetPose(currentPose);
+
+        Logger.recordOutput(SWERVE.LOG_PATH + "Console",
+                ("X: " + currentPose.getX() + "; Y: " + currentPose.getY() + "; Rotation: "
+                        + currentPose.getRotation().getDegrees() + "°."));
+    }
+
+    /**
+     * Sets whether or not the robot runs at a slower speed
+     * 
+     * @param slowMode whether to slow the drivetrain
+     */
+    public void setSnailMode() {
+        isSnailMode = !isSnailMode;
+    }
+
+    public void setLessSlowMode() {
+        isLessSlowMode = !isLessSlowMode;
+    }
+
+    public void setRobotRelative(boolean robotRelative) {
+        isRobotRelative = robotRelative;
+    }
+
+    /**
+     * Use PID to snap the robot to a targeted rotational heading
+     *
+     * @param targetHeading the heading to snap to
+     * @return the rotational velocity setpoint as a Rotation2d
+     */
+    public double snapToAngle(Rotation2d targetHeading) {
+        double currYaw = getYaw().getRadians();
+
+        return snapToController.calculate(currYaw, targetHeading.getRadians());
+    }
+
+    /**
+     * Process joystick inputs for swerve control
+     *
+     * @param processX the raw X input from a joystick. Should be -1 to 1 (HORIZONTAL motion)
+     * @param rawY the raw Y input from a joystick. Should be -1 to 1 (FORWARD motion)
+     * @param rawRot the raw rotation input from a joystick. Should be -1 to 1
+     *
+     * @return robot-relative ChassisVelocities
+     */
+    public ChassisVelocities processJoystickInputs(double rawX, double rawY, double rawRot) {
+
+        double driveTranslateX = (rawX >= 0 ? (Math.pow(Math.abs(rawX), SWERVE.JOYSTICK_EXPONENT))
+                : -(Math.pow(Math.abs(rawX), SWERVE.JOYSTICK_EXPONENT)));
+
+        double driveTranslateY = (rawY >= 0 ? (Math.pow(Math.abs(rawY), SWERVE.JOYSTICK_EXPONENT))
+                : -(Math.pow(Math.abs(rawY), SWERVE.JOYSTICK_EXPONENT)));
+
+        double driveRotate = (rawRot >= 0 ? (Math.pow(Math.abs(rawRot), SWERVE.JOYSTICK_EXPONENT))
+                : -(Math.pow(Math.abs(rawRot), SWERVE.JOYSTICK_EXPONENT)));
+
+
+        driveTranslateX *=
+                SWERVE.TRANSLATE_POWER_FAST * SWERVE.MAX_TRANSLATIONAL_VELOCITY_METERS_PER_SECOND;
+        driveTranslateY *=
+                SWERVE.TRANSLATE_POWER_FAST * SWERVE.MAX_TRANSLATIONAL_VELOCITY_METERS_PER_SECOND;
+        driveRotate *= SWERVE.ROTATE_POWER_FAST * SWERVE.MAX_ROTATIONAL_VELOCITY_RADIANS_PER_SECOND;
+
+        Logger.recordOutput(SWERVE.LOG_PATH + "TranslateY", driveTranslateY);
+        Logger.recordOutput(SWERVE.LOG_PATH + "TranslateX", driveTranslateX);
+        Logger.recordOutput(SWERVE.LOG_PATH + "driveRotate", driveRotate);
+
+        // returns a robot-relative ChassisVelocities object
+        // ChassisVelocities constructor requires: (FORWARD, HORIZONTAL, ROTATION) ->
+        // (translateY, translateX, rotate)
+        return smoothingFilter
+                .smooth(new ChassisVelocities(driveTranslateY, driveTranslateX, driveRotate));
+    }
+
+    /**
+     * Corrects the robot odometry using vision
+     * 
+     * @param visionRobotPoseMeters The robot pose using vision measuremnets
+     * @param timestampSeconds Timestamp of the vision measurement in seconds
+     */
+    public void addVisionMeasurement(Pose2d visionRobotPoseMeters, double timestampSeconds) {
+        swerve.addVisionMeasurement(visionRobotPoseMeters, timestampSeconds);
+    }
+}
