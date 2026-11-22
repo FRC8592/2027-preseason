@@ -1,11 +1,12 @@
+/* (C)2026 */
 package frc.robot.commands.proxies;
 
+import frc.robot.Robot;
 import org.wpilib.command2.Command;
 import org.wpilib.command2.Commands;
 import org.wpilib.command2.Subsystem;
 import org.wpilib.command2.WaitCommand;
 import org.wpilib.command2.WrapperCommand;
-import frc.robot.Robot;
 
 public class TimingSimulatedCommand extends WrapperCommand {
     /**

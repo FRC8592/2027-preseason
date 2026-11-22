@@ -1,27 +1,17 @@
-// Copyright (c) FIRST and other WPILib contributors.
-// Open Source Software; you can modify and/or share it under the terms of
-// the WPILib BSD license file in the root directory of this project.
-
+/* (C)2026 */
 package frc.robot.subsystems;
 
+import frc.robot.Constants.*;
 import frc.robot.subsystems.swerve.Swerve;
 import frc.robot.subsystems.vision.Vision;
-import frc.robot.Constants.*;
-
-import org.wpilib.math.geometry.Pose2d;
-import org.wpilib.driverstation.MatchState;
-import org.wpilib.driverstation.RobotState;
-import org.wpilib.driverstation.Alliance;
-import org.wpilib.driverstation.MatchType;
-import org.wpilib.driverstation.DriverStationErrors;
-import org.wpilib.command2.SubsystemBase;
-
 import java.util.List;
 import java.util.Optional;
-
 import org.littletonrobotics.junction.Logger;
 import org.photonvision.EstimatedRobotPose;
 import org.photonvision.targeting.PhotonTrackedTarget;
+import org.wpilib.command2.SubsystemBase;
+import org.wpilib.driverstation.RobotState;
+import org.wpilib.math.geometry.Pose2d;
 
 public class OdometryUpdates extends SubsystemBase {
     private Swerve swerve;
@@ -33,7 +23,7 @@ public class OdometryUpdates extends SubsystemBase {
 
     /**
      * Instantiates a class that updates swerve odometry with qualifying vision poses
-     * 
+     *
      * @param vision a vision subsystem that can update odometry
      * @param swerve the swerve subsystem
      */
@@ -57,7 +47,7 @@ public class OdometryUpdates extends SubsystemBase {
 
     /**
      * Filters vision poses and adjusts swerve odometry when the camera sees a qualifying pose
-     * 
+     *
      * @param vision the vision subsystem to check for viable tags
      */
     public void adjustOdometryWithVision(Vision vision) {
@@ -67,8 +57,7 @@ public class OdometryUpdates extends SubsystemBase {
 
         Optional<EstimatedRobotPose> robotPose = vision.getRobotPoseVision();
 
-        if (robotPose.isEmpty())
-            return;
+        if (robotPose.isEmpty()) return;
 
         robotPosition = robotPose.get().estimatedPose.toPose2d();
         ambiguity = vision.getPoseAmbiguityRatio();
@@ -95,18 +84,16 @@ public class OdometryUpdates extends SubsystemBase {
                 swerve.addVisionMeasurement(robotPosition, timeStamp);
             } else {
                 // qualifying checks for poses derived from a single apriltag
-                if ((Math.abs(ambiguity) < VISION.MAX_ACCEPTABLE_AMBIGUITY) && (tagCount > 0)
+                if ((Math.abs(ambiguity) < VISION.MAX_ACCEPTABLE_AMBIGUITY)
+                        && (tagCount > 0)
                         && (distanceToTag < VISION.REJECT_SINGLE_TAG_POSE_ESTIMATE_RANGE)) {
                     swerve.addVisionMeasurement(robotPosition, timeStamp);
                 }
             }
-
         }
 
         Logger.recordOutput(VISION.LOG_PATH + "AmbiguityRatio", ambiguity);
         Logger.recordOutput(VISION.LOG_PATH + "robotPosition", robotPosition);
         Logger.recordOutput(VISION.LOG_PATH + "initialPose", initialPose);
-
     }
-
 }
