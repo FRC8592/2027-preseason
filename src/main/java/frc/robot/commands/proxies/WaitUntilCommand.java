@@ -1,7 +1,7 @@
+/* (C)2026 */
 package frc.robot.commands.proxies;
 
 import java.util.function.BooleanSupplier;
-
 import org.wpilib.command2.Command;
 import org.wpilib.command2.WaitCommand;
 import org.wpilib.command2.WrapperCommand;
