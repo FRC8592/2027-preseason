@@ -2,11 +2,22 @@ plugins {
     id "java"
     id "application"
     id "org.wpilib.GradleRIO" version "2027.0.0-alpha-8"
+    id 'pmd'
 }
 
 java {
     sourceCompatibility = JavaVersion.VERSION_25
     targetCompatibility = JavaVersion.VERSION_25
+}
+
+pmd {
+    toolVersion = '7.16.0' // Requires Gradle 8.6+ for PMD 7
+    consoleOutput = true   // Prints violations directly to the terminal
+    ignoreFailures = false // Fails the build if violations are found
+    ruleSets = [
+        'category/java/errorprone.xml',
+        'category/java/bestpractices.xml'
+    ]
 }
 
 def ROBOT_MAIN_CLASS = "frc.robot.Main"
