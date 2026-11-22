@@ -11,15 +11,14 @@ on:
 jobs:
   # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-22.04
-    # This grabs the WPILib docker container
-    container: wpilib/roborio-cross-ubuntu:2025-22.04
-    # The robot code lives in the robot-production project, not the repo root,
-    # so every run: step below executes from that directory.
-    defaults:
-      run:
-        working-directory: robot-production
+    # The type of runner that the job will run on. Only the host for the container
+    # below, so the version here does not affect the build toolchain.
+    runs-on: ubuntu-latest
+    # The WPILib cross-compile container for our deploy target (SystemCore, not
+    # roboRIO). This is the image that ships openjdk-25-jdk, which build.gradle
+    # requires -- the roborio-cross-ubuntu:2026-* images no longer contain a JDK
+    # at all.
+    container: wpilib/systemcore-cross-ubuntu:2027-24.04
     # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
@@ -27,6 +26,10 @@ jobs:
       # Declares the repository safe and not under dubious ownership.
       - name: Add repository to git safe directories
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
+      # Fail loudly here rather than deep in a Gradle toolchain error if the
+      # container's JDK ever drifts away from the Java version build.gradle wants.
+      - name: Report Java version
+        run: java -version
       # Grant execute permission for gradlew
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
