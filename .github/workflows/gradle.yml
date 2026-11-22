@@ -30,9 +30,14 @@ jobs:
       # container's JDK ever drifts away from the Java version build.gradle wants.
       - name: Report Java version
         run: java -version
+      # Need to fetch origin/main for spotless
+      - name: Fetch origin/main for Spotless ratchetFrom
+        run: git fetch origin main:refs/remotes/origin/main
       # Grant execute permission for gradlew
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
       # Runs a single command using the runners shell
       - name: Compile and run tests on robot code
         run: ./gradlew build
+        name: spotless check
+        run: ./gradlew spotlessCheck
