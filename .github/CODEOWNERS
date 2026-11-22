@@ -1,0 +1,5 @@
+# Every pull request automatically requests a review from the software leads.
+# One approval from a lead is required to merge — see CONTRIBUTING.md.
+# Note: a user listed here must have push access to this repo, or GitHub silently ignores them.
+
+*  @bsneade @oconnelc @baaisha @darrenleomiller
