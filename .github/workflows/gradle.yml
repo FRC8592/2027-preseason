@@ -35,7 +35,7 @@ jobs:
         run: chmod +x gradlew
       # Run the PMD scanner
       - name: PMD
-      - run: ./gradlew pmdMain
+        run: ./gradlew pmdMain
       # Runs a single command using the runners shell
       - name: Compile and run tests on robot code
         run: ./gradlew build
